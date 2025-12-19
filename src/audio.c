@@ -8,7 +8,6 @@ static void on_process(void *userdata) {
     audio_ctx_t *ctx = userdata;
     struct pw_buffer *b;
     struct spa_buffer *buf;
-    float *samples;
     uint32_t n_samples;
 
     if ((b = pw_stream_dequeue_buffer(ctx->stream)) == NULL) {
@@ -16,7 +15,10 @@ static void on_process(void *userdata) {
     }
 
     buf = b->buffer;
-    if ((samples = buf->datas[0].data) == NULL) {
+    float *ch_l = buf->datas[0].data;
+    float *ch_r = ctx->stereo && buf->n_datas > 1 ? buf->datas[1].data : NULL;
+
+    if (ch_l == NULL) {
         pw_stream_queue_buffer(ctx->stream, b);
         return;
     }
@@ -24,7 +26,8 @@ static void on_process(void *userdata) {
     n_samples = buf->datas[0].chunk->size / sizeof(float);
 
     for (uint32_t i = 0; i < n_samples; i++) {
-        ctx->buffer[ctx->write_pos] = samples[i];
+        ctx->buffer_l[ctx->write_pos] = ch_l[i];
+        ctx->buffer_r[ctx->write_pos] = ch_r ? ch_r[i] : ch_l[i];
         ctx->write_pos = (ctx->write_pos + 1) % AUDIO_BUFFER_SIZE;
     }
 
@@ -104,7 +107,7 @@ int audio_init(audio_ctx_t *ctx, const char *client_name) {
     params[0] = spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat,
         &SPA_AUDIO_INFO_RAW_INIT(
             .format = SPA_AUDIO_FORMAT_F32,
-            .channels = 1,
+            .channels = 2,
             .rate = 0  // Any rate
         ));
 
@@ -122,6 +125,7 @@ int audio_init(audio_ctx_t *ctx, const char *client_name) {
     }
 
     pw_thread_loop_start(ctx->loop);
+    ctx->stereo = true;  // PipeWire handles stereo via 2-channel format
     ctx->running = true;
 
     return 0;
@@ -143,7 +147,7 @@ void audio_shutdown(audio_ctx_t *ctx) {
     ctx->running = false;
 }
 
-size_t audio_get_samples(audio_ctx_t *ctx, float *dest, size_t count) {
+size_t audio_get_samples(audio_ctx_t *ctx, float *dest_l, float *dest_r, size_t count) {
     if (count > AUDIO_BUFFER_SIZE) {
         count = AUDIO_BUFFER_SIZE;
     }
@@ -151,7 +155,9 @@ size_t audio_get_samples(audio_ctx_t *ctx, float *dest, size_t count) {
     size_t start = (ctx->write_pos + AUDIO_BUFFER_SIZE - count) % AUDIO_BUFFER_SIZE;
 
     for (size_t i = 0; i < count; i++) {
-        dest[i] = ctx->buffer[(start + i) % AUDIO_BUFFER_SIZE];
+        size_t idx = (start + i) % AUDIO_BUFFER_SIZE;
+        dest_l[i] = ctx->buffer_l[idx];
+        dest_r[i] = ctx->buffer_r[idx];
     }
 
     return count;

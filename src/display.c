@@ -185,8 +185,18 @@ int display_init(display_ctx_t *ctx) {
     ctx->waterfall_pos = 0;
     ctx->gain = 1.5;
     ctx->show_info = false;
+    ctx->show_stats = false;
     ctx->waterfall_mode = false;
     ctx->peak_hold_time = 0.5;  // 0.5 second default
+    ctx->max_sample = 0;
+    ctx->rms_left = 0;
+    ctx->rms_right = 0;
+    ctx->stats_frame = 0;
+    ctx->stereo = false;
+    memset(ctx->peak_history, 0, sizeof(ctx->peak_history));
+    memset(ctx->rms_history_l, 0, sizeof(ctx->rms_history_l));
+    memset(ctx->rms_history_r, 0, sizeof(ctx->rms_history_r));
+    ctx->sample_rate = 48000;  // default, updated from audio
 
     // Set dark grey background for truecolor
     if (ctx->use_truecolor) {
@@ -228,19 +238,72 @@ void display_resize(display_ctx_t *ctx) {
     clear();
 }
 
+void display_update_stats(display_ctx_t *ctx, const float *samples_l, const float *samples_r, size_t count) {
+    // Calculate this frame's peak and RMS for both channels
+    double frame_peak = 0;
+    double sum_sq_l = 0;
+    double sum_sq_r = 0;
+
+    for (size_t i = 0; i < count; i++) {
+        double abs_l = fabs(samples_l[i]);
+        double abs_r = fabs(samples_r[i]);
+        double abs_max = abs_l > abs_r ? abs_l : abs_r;
+        if (abs_max > frame_peak) frame_peak = abs_max;
+        sum_sq_l += samples_l[i] * samples_l[i];
+        sum_sq_r += samples_r[i] * samples_r[i];
+    }
+    double frame_rms_l = sqrt(sum_sq_l / count);
+    double frame_rms_r = sqrt(sum_sq_r / count);
+
+    // Store in rolling buffers
+    int peak_idx = ctx->stats_frame % 180;  // 3 sec window
+    int rms_idx = ctx->stats_frame % 15;    // 250ms window
+    ctx->peak_history[peak_idx] = frame_peak;
+    ctx->rms_history_l[rms_idx] = frame_rms_l * frame_rms_l;
+    ctx->rms_history_r[rms_idx] = frame_rms_r * frame_rms_r;
+
+    // Update displayed values at 4Hz (every 15 frames at 60fps)
+    if (ctx->stats_frame % 15 == 0) {
+        // Peak: max over 3 second window
+        double peak = 0;
+        for (int i = 0; i < 180; i++) {
+            if (ctx->peak_history[i] > peak) peak = ctx->peak_history[i];
+        }
+        ctx->max_sample = peak;
+
+        // RMS: average over 250ms window for each channel
+        double rms_sum_l = 0;
+        double rms_sum_r = 0;
+        for (int i = 0; i < 15; i++) {
+            rms_sum_l += ctx->rms_history_l[i];
+            rms_sum_r += ctx->rms_history_r[i];
+        }
+        ctx->rms_left = sqrt(rms_sum_l / 15);
+        ctx->rms_right = sqrt(rms_sum_r / 15);
+    }
+
+    ctx->stats_frame++;
+}
+
 void display_update(display_ctx_t *ctx, const double *spectrum, size_t spectrum_size) {
     if (!ctx->bar_values || !ctx->peak_values) return;
 
-    int bar_height = ctx->height;  // Full height, no status bar
+    int stats_rows = ctx->show_stats ? 1 : 0;
+    int bar_height = ctx->height - stats_rows;
 
-    // Map spectrum bins to display bars (logarithmic frequency scale)
-    // Skip bin 0 (DC) and start from ~20Hz equivalent
-    constexpr size_t MIN_BIN = 1;
+    // Map spectrum bins to display bars using octave-based log scale
+    // Each octave (frequency doubling) takes equal visual space
+    constexpr double MIN_FREQ = 20.0;    // 20 Hz low end
+    double max_freq = ctx->sample_rate > 0 ? ctx->sample_rate / 2.0 : 24000.0;
+    double freq_ratio = max_freq / MIN_FREQ;
+    double bin_width = ctx->sample_rate > 0 ? (double)ctx->sample_rate / (spectrum_size * 2) : 11.7;
+
     for (int bar = 0; bar < ctx->num_bars; bar++) {
-        double t = (double)(bar + 1) / ctx->num_bars;  // 0 excluded
-        double log_pos = MIN_BIN + pow(t, 2.5) * (spectrum_size - MIN_BIN);
-        size_t bin = (size_t)log_pos;
+        double t = (double)bar / (ctx->num_bars - 1);  // 0 to 1
+        double freq = MIN_FREQ * pow(freq_ratio, t);   // exponential: octave spacing
+        size_t bin = (size_t)(freq / bin_width);
         if (bin >= spectrum_size) bin = spectrum_size - 1;
+        if (bin < 1) bin = 1;  // skip DC
 
         double scaled = spectrum[bin] * ctx->gain;
         if (scaled > 1.0) scaled = 1.0;
@@ -274,7 +337,7 @@ void display_update(display_ctx_t *ctx, const double *spectrum, size_t spectrum_
             for (int x = 0; x < ctx->num_bars && x < ctx->width; x++) {
                 double val = ctx->waterfall[hist_idx * ctx->num_bars + x];
                 rgb_t c = get_gradient_color(ctx->colormap, val);
-                printf("\033[%d;%dH\033[38;2;%d;%d;%d;48;2;30;30;30m█", y + 1, x + 1, c.r, c.g, c.b);
+                printf("\033[%d;%dH\033[38;2;%d;%d;%d;48;2;30;30;30m█", y + 1 + stats_rows, x + 1, c.r, c.g, c.b);
             }
         }
     } else {
@@ -305,20 +368,23 @@ void display_update(display_ctx_t *ctx, const double *spectrum, size_t spectrum_
                 if (is_peak && char_idx == 0) {
                     if (ctx->use_truecolor) {
                         printf("\033[%d;%dH\033[38;2;180;0;0;48;2;30;30;30m%s",
-                               row + 1, x + 1, PEAK_CHARS[peak_char_idx]);
+                               row + 1 + stats_rows, x + 1, PEAK_CHARS[peak_char_idx]);
                     } else if (ctx->use_color) {
+                        move(row + stats_rows, x);
                         attron(COLOR_PAIR(PAIR_PEAK) | A_BOLD);
                         addch('_');
                         attroff(COLOR_PAIR(PAIR_PEAK) | A_BOLD);
                     } else {
+                        move(row + stats_rows, x);
                         addch('_');
                     }
                 } else if (char_idx > 0) {
                     if (ctx->use_truecolor) {
                         rgb_t c = get_gradient_color(ctx->colormap, height_ratio);
                         printf("\033[%d;%dH\033[38;2;%d;%d;%d;48;2;30;30;30m%s",
-                               row + 1, x + 1, c.r, c.g, c.b, BAR_CHARS_UTF8[char_idx]);
+                               row + 1 + stats_rows, x + 1, c.r, c.g, c.b, BAR_CHARS_UTF8[char_idx]);
                     } else if (ctx->use_color) {
+                        move(row + stats_rows, x);
                         int color_pair = 1 + (int)(height_ratio * 7);
                         if (color_pair > 8) color_pair = 8;
                         attron(COLOR_PAIR(color_pair));
@@ -326,14 +392,15 @@ void display_update(display_ctx_t *ctx, const double *spectrum, size_t spectrum_
                         addwstr(wstr);
                         attroff(COLOR_PAIR(color_pair));
                     } else {
+                        move(row + stats_rows, x);
                         wchar_t wstr[2] = {BAR_CHARS[char_idx], L'\0'};
                         addwstr(wstr);
                     }
                 } else {
                     if (ctx->use_truecolor) {
-                        printf("\033[%d;%dH\033[48;2;30;30;30m ", row + 1, x + 1);
+                        printf("\033[%d;%dH\033[48;2;30;30;30m ", row + 1 + stats_rows, x + 1);
                     } else {
-                        move(row, x);
+                        move(row + stats_rows, x);
                         addch(' ');
                     }
                 }
@@ -359,6 +426,11 @@ bool display_handle_input(display_ctx_t *ctx, int *smoothing_percent) {
         case 'i':
         case 'I':
             ctx->show_info = !ctx->show_info;
+            break;
+
+        case 'z':
+        case 'Z':
+            ctx->show_stats = !ctx->show_stats;
             break;
 
         case 'w':
@@ -415,10 +487,41 @@ bool display_handle_input(display_ctx_t *ctx, int *smoothing_percent) {
             break;
     }
 
+    // Draw stats bar (top row)
+    if (ctx->show_stats) {
+        double db_peak = 20.0 * log10(ctx->max_sample + 1e-10);
+        int s16_peak = (int)(ctx->max_sample * 32767);
+        double rms_avg = (ctx->rms_left + ctx->rms_right) / 2.0;
+        double db_rms = 20.0 * log10(rms_avg + 1e-10);
+        // L/R balance: positive = right louder, negative = left louder
+        double balance_db = 20.0 * log10((ctx->rms_right + 1e-10) / (ctx->rms_left + 1e-10));
+
+        if (ctx->use_truecolor) {
+            printf("\033[1;1H\033[38;2;255;255;255;48;2;30;30;30m");
+            printf(" s16 Peak: %5d %.4f %5.1fdBFS | RMS: %.4f %5.1fdBFS ",
+                   s16_peak, ctx->max_sample, db_peak, rms_avg, db_rms);
+            if (ctx->stereo) {
+                printf("L/R: %+4.1fdB ", balance_db);
+            } else {
+                printf("(mono) ");
+            }
+            // Pad to width
+            int len = ctx->stereo ? 78 : 72;
+            for (int i = len; i < ctx->width; i++) putchar(' ');
+            printf("\033[0m");
+            fflush(stdout);
+        } else {
+            attron(A_BOLD);
+            mvprintw(0, 1, "s16 Peak: %5d %.3f %5.1fdBFS  RMS: %.3f %5.1fdBFS",
+                     s16_peak, ctx->max_sample, db_peak, rms_avg, db_rms);
+            attroff(A_BOLD);
+        }
+    }
+
     // Draw info window (top right corner)
     if (ctx->show_info) {
         int info_w = 28;
-        int info_h = 11;
+        int info_h = 12;
         int info_x = ctx->width - info_w - 1;
         int info_y = 0;
 
@@ -442,8 +545,9 @@ bool display_handle_input(display_ctx_t *ctx, int *smoothing_percent) {
             printf("\033[%d;%dH  a/s    gain %.1fx", info_y + 4, info_x + 1, ctx->gain);
             printf("\033[%d;%dH  r/f    smooth %d%%", info_y + 5, info_x + 1, *smoothing_percent);
             printf("\033[%d;%dH  e/d    hold %.1fs", info_y + 6, info_x + 1, ctx->peak_hold_time);
-            printf("\033[%d;%dH  i      info", info_y + 7, info_x + 1);
-            printf("\033[%d;%dH  q/ESC  quit", info_y + 8, info_x + 1);
+            printf("\033[%d;%dH  z      stats", info_y + 7, info_x + 1);
+            printf("\033[%d;%dH  i      info", info_y + 8, info_x + 1);
+            printf("\033[%d;%dH  q/ESC  quit", info_y + 9, info_x + 1);
             printf("\033[0m");
             fflush(stdout);
         } else {
@@ -456,8 +560,9 @@ bool display_handle_input(display_ctx_t *ctx, int *smoothing_percent) {
             mvprintw(info_y + 4, info_x + 2, "a/s    gain");
             mvprintw(info_y + 5, info_x + 2, "r/f    smooth");
             mvprintw(info_y + 6, info_x + 2, "e/d    hold");
-            mvprintw(info_y + 7, info_x + 2, "i      info");
-            mvprintw(info_y + 8, info_x + 2, "q/ESC  quit");
+            mvprintw(info_y + 7, info_x + 2, "z      stats");
+            mvprintw(info_y + 8, info_x + 2, "i      info");
+            mvprintw(info_y + 9, info_x + 2, "q/ESC  quit");
         }
     }
 

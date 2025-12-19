@@ -37,15 +37,26 @@ int main(void) {
         fprintf(stderr, "Failed to initialize display\n");
         goto cleanup;
     }
+    display.sample_rate = audio_get_sample_rate(&audio);
+    display.stereo = audio.stereo;
 
-    float samples[FFT_SIZE];
+    float samples_l[FFT_SIZE];
+    float samples_r[FFT_SIZE];
+    float samples_mono[FFT_SIZE];
     int smoothing_percent = 80;
 
     while (running && audio.running) {
-        audio_get_samples(&audio, samples, FFT_SIZE);
-        spectrum_process(&spectrum, samples, FFT_SIZE);
+        audio_get_samples(&audio, samples_l, samples_r, FFT_SIZE);
+
+        // Mix to mono for spectrum analysis
+        for (size_t i = 0; i < FFT_SIZE; i++) {
+            samples_mono[i] = (samples_l[i] + samples_r[i]) * 0.5f;
+        }
+
+        spectrum_process(&spectrum, samples_mono, FFT_SIZE);
         spectrum_set_smoothing(&spectrum, smoothing_percent / 100.0);
 
+        display_update_stats(&display, samples_l, samples_r, FFT_SIZE);
         display_update(&display, spectrum.smoothed, SPECTRUM_BINS);
 
         if (!display_handle_input(&display, &smoothing_percent)) {
