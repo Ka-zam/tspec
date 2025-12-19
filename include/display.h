@@ -7,7 +7,7 @@
 
 constexpr int BAR_LEVELS = 8;
 constexpr int NUM_COLORMAPS = 4;
-constexpr double PEAK_FALL_SPEED = 0.005;
+constexpr int WATERFALL_HISTORY = 256;
 
 typedef enum {
     COLORMAP_FIRE,      // green -> yellow -> red
@@ -23,11 +23,16 @@ typedef struct {
     int num_bars;
     double *bar_values;
     double *peak_values;
+    int *peak_hold_frames;      // frames remaining before peak starts falling
+    double *waterfall;          // 2D array [height][num_bars]
+    int waterfall_pos;
     bool use_color;
     bool use_truecolor;
     bool show_info;
+    bool waterfall_mode;
     colormap_t colormap;
     double gain;
+    double peak_hold_time;      // seconds before peak starts falling
 } display_ctx_t;
 
 int display_init(display_ctx_t *ctx);
