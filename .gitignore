@@ -1,0 +1,5 @@
+build/
+*.o
+tspec
+compile_commands.json
+.cache/
