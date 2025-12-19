@@ -7,7 +7,7 @@
 
 constexpr int BAR_LEVELS = 8;
 constexpr int NUM_COLORMAPS = 4;
-constexpr double PEAK_FALL_SPEED = 0.02;
+constexpr double PEAK_FALL_SPEED = 0.005;
 
 typedef enum {
     COLORMAP_FIRE,      // green -> yellow -> red
@@ -24,7 +24,10 @@ typedef struct {
     double *bar_values;
     double *peak_values;
     bool use_color;
+    bool use_truecolor;
+    bool show_info;
     colormap_t colormap;
+    double gain;
 } display_ctx_t;
 
 int display_init(display_ctx_t *ctx);
