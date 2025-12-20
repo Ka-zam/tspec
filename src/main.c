@@ -24,7 +24,7 @@ int main(void) {
 
     if (audio_init(&audio, "tspec") != 0) {
         fprintf(stderr, "Failed to initialize audio\n");
-        fprintf(stderr, "Make sure JACK or PipeWire (with JACK support) is running\n");
+        fprintf(stderr, "Make sure PipeWire is running\n");
         goto cleanup;
     }
 

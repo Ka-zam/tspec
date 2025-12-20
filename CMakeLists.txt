@@ -6,7 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(JACK REQUIRED jack)
+pkg_check_modules(PIPEWIRE REQUIRED libpipewire-0.3)
 pkg_check_modules(FFTW3 REQUIRED fftw3)
 pkg_check_modules(NCURSES REQUIRED ncursesw)
 
@@ -19,13 +19,13 @@ add_executable(tspec
 
 target_include_directories(tspec PRIVATE
     ${CMAKE_SOURCE_DIR}/include
-    ${JACK_INCLUDE_DIRS}
+    ${PIPEWIRE_INCLUDE_DIRS}
     ${FFTW3_INCLUDE_DIRS}
     ${NCURSES_INCLUDE_DIRS}
 )
 
 target_link_libraries(tspec PRIVATE
-    ${JACK_LIBRARIES}
+    ${PIPEWIRE_LIBRARIES}
     ${FFTW3_LIBRARIES}
     ${NCURSES_LIBRARIES}
     m
