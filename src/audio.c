@@ -8,26 +8,25 @@ static void on_process(void *userdata) {
     audio_ctx_t *ctx = userdata;
     struct pw_buffer *b;
     struct spa_buffer *buf;
-    uint32_t n_samples;
 
     if ((b = pw_stream_dequeue_buffer(ctx->stream)) == NULL) {
         return;
     }
 
     buf = b->buffer;
-    float *ch_l = buf->datas[0].data;
-    float *ch_r = ctx->stereo && buf->n_datas > 1 ? buf->datas[1].data : NULL;
+    float *samples = buf->datas[0].data;
 
-    if (ch_l == NULL) {
+    if (samples == NULL) {
         pw_stream_queue_buffer(ctx->stream, b);
         return;
     }
 
-    n_samples = buf->datas[0].chunk->size / sizeof(float);
+    // Stereo interleaved: L,R,L,R... so divide by 2 for frame count
+    uint32_t n_frames = buf->datas[0].chunk->size / sizeof(float) / 2;
 
-    for (uint32_t i = 0; i < n_samples; i++) {
-        ctx->buffer_l[ctx->write_pos] = ch_l[i];
-        ctx->buffer_r[ctx->write_pos] = ch_r ? ch_r[i] : ch_l[i];
+    for (uint32_t i = 0; i < n_frames; i++) {
+        ctx->buffer_l[ctx->write_pos] = samples[i * 2];
+        ctx->buffer_r[ctx->write_pos] = samples[i * 2 + 1];
         ctx->write_pos = (ctx->write_pos + 1) % AUDIO_BUFFER_SIZE;
     }
 

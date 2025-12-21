@@ -19,6 +19,8 @@ add_executable(tspec
 
 target_include_directories(tspec PRIVATE
     ${CMAKE_SOURCE_DIR}/include
+)
+target_include_directories(tspec SYSTEM PRIVATE
     ${PIPEWIRE_INCLUDE_DIRS}
     ${FFTW3_INCLUDE_DIRS}
     ${NCURSES_INCLUDE_DIRS}

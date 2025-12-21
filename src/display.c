@@ -14,8 +14,6 @@ static const char *BAR_CHARS_UTF8[] = {" ", "▁", "▂", "▃", "▄", "▅", "
 static const char *PEAK_CHARS[] = {"🭶", "🭷", "🭸", "🭹", "🭺", "🭻", "▁", "▁"};
 constexpr int PEAK_POSITIONS = 8;
 
-static const char *COLORMAP_NAMES[] = {"fire", "ice", "rainbow", "mono"};
-
 // Color pairs for 8-color fallback
 enum {
     PAIR_STATUS = 9,
@@ -326,7 +324,7 @@ void display_update(display_ctx_t *ctx, const double *spectrum, size_t spectrum_
         for (int bar = 0; bar < ctx->num_bars; bar++) {
             ctx->waterfall[ctx->waterfall_pos * ctx->num_bars + bar] = ctx->bar_values[bar];
         }
-        ctx->waterfall_pos = (ctx->waterfall_pos + 1) % ctx->height;
+        ctx->waterfall_pos = (ctx->waterfall_pos + 1) % WATERFALL_HISTORY;
     }
 
     if (ctx->waterfall_mode && ctx->use_truecolor) {
